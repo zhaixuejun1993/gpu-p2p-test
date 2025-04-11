@@ -1,5 +1,7 @@
 
 #include "ocl_context.h"
+#include <chrono>
+#include <iomanip> 
 
 oclContext::oclContext(/* args */)
 {
@@ -7,7 +9,7 @@ oclContext::oclContext(/* args */)
 
 oclContext::~oclContext()
 {
-    printf("Enter %s\n", __FUNCTION__);
+    // printf("Enter %s\n", __FUNCTION__);
 
     clReleaseKernel(kernel_);
     clReleaseProgram(program_);
@@ -58,7 +60,7 @@ void oclContext::init(int devIdx)
             err = clGetDeviceInfo(device_, CL_DEVICE_NAME, sizeof(device_name), device_name, nullptr);
             CHECK_OCL_ERROR_EXIT(err, "clGetDeviceInfo");
 
-            printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", devIdx, device_name, device_, context_, queue_);
+            // printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", devIdx, device_name, device_, context_, queue_);
 
             return;
         }
@@ -92,7 +94,7 @@ void oclContext::init(std::vector<int> device_list)
         if (num_devices > 0)
         {
             platform_ = platform;
-            printf("Platform %p has %d GPU devices\n", platform_, num_devices);
+            // printf("Platform %p has %d GPU devices\n", platform_, num_devices);
 
             if (!clCreateBufferWithPropertiesINTEL_) {
                 clCreateBufferWithPropertiesINTEL_ = (pfn_clCreateBufferWithPropertiesINTEL)clGetExtensionFunctionAddressForPlatform(platform_, "clCreateBufferWithPropertiesINTEL");
@@ -106,9 +108,9 @@ void oclContext::init(std::vector<int> device_list)
             err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, num_devices, devices.data(), nullptr);
             CHECK_OCL_ERROR_EXIT(err, "clGetDeviceIDs");
 
-            printf("all gpu devices: \n");
+            // printf("all gpu devices: \n");
             for (size_t i = 0; i < num_devices; i++) {
-                printf("gpu device index %d, cl_device_id = %p\n", i, devices[i]);
+                // printf("gpu device index %d, cl_device_id = %p\n", i, devices[i]);
             }
             
             if (num_devices < device_list.size()) {
@@ -132,7 +134,7 @@ void oclContext::init(std::vector<int> device_list)
             char device_name[1024];
             err = clGetDeviceInfo(device_, CL_DEVICE_NAME, sizeof(device_name), device_name, nullptr);
             CHECK_OCL_ERROR_EXIT(err, "clGetDeviceInfo");
-            printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", device_list[0], device_name, device_, context_, queue_);
+            // printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", device_list[0], device_name, device_, context_, queue_);
 
             return;
         }
@@ -269,6 +271,61 @@ void oclContext::runKernel(char *kernelCode, char *kernelName, cl_mem buf0, cl_m
         clFlush(queue_);
     else if (sync == 2)
         clFinish(queue_);
+}
+
+void oclContext::runKernel1(char *kernelCode, char *kernelName, cl_mem buf0, cl_mem buf1, size_t elemCount)
+{
+    cl_int err;
+
+    cl_uint knlcount = 1;
+    const char *knlstrList[] = {kernelCode};
+    size_t knlsizeList[] = {strlen(kernelCode)};
+
+    program_ = clCreateProgramWithSource(context_, knlcount, knlstrList, knlsizeList, &err);
+    CHECK_OCL_ERROR_EXIT(err, "clCreateProgramWithSource failed");
+
+    std::string buildopt = "-cl-std=CL2.0 -cl-intel-greater-than-4GB-buffer-required";
+    err = clBuildProgram(program_, 0, NULL, buildopt.c_str(), NULL, NULL);
+    if (err < 0)
+    {
+        size_t logsize = 0;
+        err = clGetProgramBuildInfo(program_, device_, CL_PROGRAM_BUILD_LOG, 0, NULL, &logsize);
+        CHECK_OCL_ERROR_EXIT(err, "clGetProgramBuildInfo failed");
+
+        std::vector<char> logbuf(logsize + 1, 0);
+        err = clGetProgramBuildInfo(program_, device_, CL_PROGRAM_BUILD_LOG, logsize + 1, logbuf.data(), NULL);
+        CHECK_OCL_ERROR_EXIT(err, "clGetProgramBuildInfo failed");
+        printf("%s\n", logbuf.data());
+
+        exit(1);
+    }
+
+    kernel_ = clCreateKernel(program_, kernelName, &err);
+    CHECK_OCL_ERROR_EXIT(err, "clCreateKernel failed");
+
+    err = clSetKernelArg(kernel_, 0, sizeof(cl_mem), &buf0);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    err = clSetKernelArg(kernel_, 1, sizeof(cl_mem), &buf1);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    size_t global_size[] = {elemCount};
+    double avg_val = 0.0;
+    for (int i = 0; i < 200; i++)
+    {
+        const auto start = std::chrono::high_resolution_clock::now();
+        err = clEnqueueNDRangeKernel(queue_, kernel_, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+        CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
+        clFinish(queue_);
+        const auto end = std::chrono::high_resolution_clock::now();
+        const std::chrono::duration<double, std::milli> elapsed = end - start;
+        // std::cout << elemCount * sizeof(uint32_t) / 1024.0 / 1024.0 / 1024.0 / elapsed.count() * 1000 << std::endl;
+        if (i != 0) {
+            avg_val = avg_val + elemCount * sizeof(uint32_t) / 1024.0 / 1024.0 / 1024.0 / elapsed.count() * 1000;
+        }
+    }
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << std::setw(8) << avg_val / 199.0 << std::endl;
 }
 
 cl_mem oclContext::createBuffer(size_t size, const std::vector<uint32_t> &inbuf)

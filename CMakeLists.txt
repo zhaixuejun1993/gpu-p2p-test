@@ -11,6 +11,7 @@ add_subdirectory(lz_p2p)
 add_subdirectory(ocl_p2p)
 add_subdirectory(interop)
 add_subdirectory(memtest)
+add_subdirectory(ocl-copy)
 
 include_directories(/usr/include/level_zero)
 link_directories(/usr/lib/x86_64-linux-gnu/)
