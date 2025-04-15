@@ -33,6 +33,399 @@ kernel void add_two_buf(global int *src1, global int *src2, int src1_offset, int
 ";
 const size_t w_size = 2;
 bool debug_log = true;
+void test_fun0(size_t elemCount = 32)
+{
+  std::vector<uint32_t> initBuf0(elemCount, 1);
+  std::vector<uint32_t> initBuf1(elemCount, 2);
+
+  // initialize two opencl contexts
+  std::vector<oclContext *> contexts;
+  oclContext oclctx0, oclctx1;
+  oclctx0.init({0, 1});
+  oclctx1.init({1, 0});
+  contexts.push_back(&oclctx0);
+  contexts.push_back(&oclctx1);
+
+  size_t size_in_bytes = elemCount * sizeof(uint32_t);
+  std::vector<cl_mem *> cl_fc_buf;
+  cl_mem cl_fc_buf0 = contexts[0]->createBuffer2(0, size_in_bytes, initBuf0);
+  cl_mem cl_fc_buf1 = contexts[1]->createBuffer2(1, size_in_bytes, initBuf1);
+  cl_fc_buf.push_back(&cl_fc_buf0);
+  cl_fc_buf.push_back(&cl_fc_buf1);
+  if (debug_log)
+  {
+    contexts[0]->printBuffer(*cl_fc_buf[0], 32);
+    contexts[1]->printBuffer(*cl_fc_buf[1], 32);
+  }
+  std::mutex global_mtx;
+  std::vector<cl_mem *> cl_sub_bufs(2, nullptr);
+  std::vector<cl_mem *> cl_sub_shared_bufs(2, nullptr);
+  std::vector<bool> sub_buf_ready_flag(w_size, false);
+  std::vector<bool> ready_free_flag(w_size, false);
+  std::vector<cl_event> copy_event(w_size, NULL);
+
+  auto task = [&](int w_rank)
+  {
+    cl_mem cl_sub_buf = contexts[w_rank]->createBuffer2(0, size_in_bytes, {});
+
+    cl_sub_bufs[w_rank] = &cl_sub_buf;
+    sub_buf_ready_flag[w_rank] = true;
+    cl_int err;
+
+    while (true)
+    {
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (sub_buf_ready_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+
+    auto dst_idx = (w_rank + 1) % w_size;
+    uint64_t handle_cl_sub_buf_dst = contexts[dst_idx]->deriveHandle(*cl_sub_bufs[dst_idx]);
+    cl_mem cl_sub_buf_dst_shared_on_rank = contexts[w_rank]->createFromHandle(handle_cl_sub_buf_dst, size_in_bytes);
+    cl_sub_shared_bufs[w_rank] = &cl_sub_buf_dst_shared_on_rank;
+
+    err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], 0, 0, size_in_bytes, 0, nullptr, &copy_event[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+
+    err = clWaitForEvents(1, &copy_event[dst_idx]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    if (debug_log)
+    {
+      std::lock_guard<std::mutex> lock(global_mtx);
+      std::cout << "========================" << std::endl;
+      std::cout << "[Step 1][Rank] " << w_rank << " sub_buf: " << std::endl;
+      contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
+    }
+
+    ready_free_flag[w_rank] = true;
+    while (true)
+    {
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (ready_free_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+    contexts[w_rank]->freeBuffer(*cl_sub_shared_bufs[w_rank]);
+    cl_sub_shared_bufs[w_rank] = nullptr;
+    contexts[w_rank]->freeBuffer(*cl_sub_bufs[w_rank]);
+    cl_sub_bufs[w_rank] = nullptr;
+    clReleaseEvent(copy_event[w_rank]);
+    copy_event[w_rank] = NULL;
+  };
+  const auto start = std::chrono::high_resolution_clock::now();
+  std::thread t0(task, 0);
+  std::thread t1(task, 1);
+  t0.join();
+  t1.join();
+  for (int i = 0; i < w_size; i++)
+  {
+    contexts[i]->freeBuffer(*cl_fc_buf[i]);
+  }
+}
+void test_fun1(size_t elemCount = 32)
+{
+  std::vector<uint32_t> initBuf0(elemCount, 1);
+  std::vector<uint32_t> initBuf1(elemCount, 2);
+  // for (size_t i = 0; i < elemCount; i++)
+  //   initBuf[i] = (i % 1024);
+
+  size_t size_in_bytes = elemCount * sizeof(uint32_t);
+  // initialize two opencl contexts
+  std::vector<oclContext *> contexts;
+  oclContext oclctx0, oclctx1;
+  oclctx0.init({0, 1});
+  oclctx1.init({1, 0});
+  contexts.push_back(&oclctx0);
+  contexts.push_back(&oclctx1);
+
+  std::vector<cl_mem *> cl_fc_buf;
+  cl_mem cl_fc_buf0 = contexts[0]->createBuffer2(0, size_in_bytes, initBuf0); // = fc output buffer in gpu0
+  cl_mem cl_fc_buf1 = contexts[1]->createBuffer2(1, size_in_bytes, initBuf1); // = fc output buffer in gpu1
+  cl_fc_buf.push_back(&cl_fc_buf0);
+  cl_fc_buf.push_back(&cl_fc_buf1);
+  if (debug_log)
+  {
+    contexts[0]->printBuffer(*cl_fc_buf[0]);
+    contexts[1]->printBuffer(*cl_fc_buf[1]);
+  }
+  std::mutex global_mtx;
+  std::vector<cl_mem *> cl_sub_bufs(2, nullptr);
+  std::vector<cl_mem *> cl_sub_shared_bufs(2, nullptr);
+  std::vector<bool> sub_buf_ready_flag(w_size, false);
+  std::vector<bool> ready_free_flag(w_size, false);
+  std::vector<cl_event> copy_event(w_size, NULL);
+
+  auto task = [&](int w_rank)
+  {
+    contexts[w_rank]->createAddKernel(add_kernel_code, "add_two_buf");
+    size_t sub_size_in_bytes = size_in_bytes / w_size;
+    cl_mem cl_sub_buf = contexts[w_rank]->createBuffer2(0, sub_size_in_bytes, {});
+
+    cl_sub_bufs[w_rank] = &cl_sub_buf;
+    sub_buf_ready_flag[w_rank] = true;
+    cl_int err;
+
+    while (true)
+    {
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (sub_buf_ready_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+
+    auto dst_idx = (w_rank + 1) % w_size;
+    uint64_t handle_cl_sub_buf_dst = contexts[dst_idx]->deriveHandle(*cl_sub_bufs[dst_idx]);
+    cl_mem cl_sub_buf_dst_shared_on_rank = contexts[w_rank]->createFromHandle(handle_cl_sub_buf_dst, sub_size_in_bytes);
+    cl_sub_shared_bufs[w_rank] = &cl_sub_buf_dst_shared_on_rank;
+
+    err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], w_rank * sub_size_in_bytes, 0, sub_size_in_bytes, 0, nullptr, &copy_event[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+
+    err = clWaitForEvents(1, &copy_event[dst_idx]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    if (debug_log)
+    {
+      std::lock_guard<std::mutex> lock(global_mtx);
+      std::cout << "========================" << std::endl;
+      std::cout << "[Step 1][Rank] " << w_rank << " sub_buf: " << std::endl;
+      contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
+    }
+
+    ready_free_flag[w_rank] = true;
+    while (true)
+    {
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (ready_free_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+    contexts[w_rank]->freeBuffer(*cl_sub_shared_bufs[w_rank]);
+    cl_sub_shared_bufs[w_rank] = nullptr;
+    contexts[w_rank]->freeBuffer(*cl_sub_bufs[w_rank]);
+    cl_sub_bufs[w_rank] = nullptr;
+    clReleaseEvent(copy_event[w_rank]);
+    copy_event[w_rank] = NULL;
+  };
+  const auto start = std::chrono::high_resolution_clock::now();
+  std::thread t0(task, 0);
+  std::thread t1(task, 1);
+  t0.join();
+  t1.join();
+  for (int i = 0; i < w_size; i++)
+  {
+    contexts[i]->freeBuffer(*cl_fc_buf[i]);
+  }
+}
+void quary_status(int w_rank, cl_event &event)
+{
+  cl_int event_status;
+  clGetEventInfo(
+      event,                             // 要查询的事件对象
+      CL_EVENT_COMMAND_EXECUTION_STATUS, // 查询类型：执行状态
+      sizeof(cl_int),                    // 返回数据大小
+      &event_status,                     // 存储结果的指针
+      NULL                               // 不需要实际数据大小
+  );
+
+  switch (event_status)
+  {
+  case CL_QUEUED:
+    printf("%d 命令已入队\n", w_rank);
+    break;
+  case CL_SUBMITTED:
+    printf("%d 命令已提交到设备\n", w_rank);
+    break;
+  case CL_RUNNING:
+    printf("%d 命令正在执行\n", w_rank);
+    break;
+  case CL_COMPLETE:
+    printf("%d 命令已完成\n", w_rank);
+    break;
+  }
+}
+
+void test_fun2(size_t elemCount = 32)
+{
+  std::vector<uint32_t> initBuf0(elemCount, 1);
+  std::vector<uint32_t> initBuf1(elemCount, 2);
+  // for (size_t i = 0; i < elemCount; i++)
+  //   initBuf[i] = (i % 1024);
+
+  size_t size_in_bytes = elemCount * sizeof(uint32_t);
+  // initialize two opencl contexts
+  std::vector<oclContext *> contexts;
+  oclContext oclctx0, oclctx1;
+  oclctx0.init({0, 1});
+  oclctx1.init({1, 0});
+  contexts.push_back(&oclctx0);
+  contexts.push_back(&oclctx1);
+
+  std::vector<cl_mem *> cl_fc_buf;
+  cl_mem cl_fc_buf0 = contexts[0]->createBuffer2(0, size_in_bytes, initBuf0); // = fc output buffer in gpu0
+  cl_mem cl_fc_buf1 = contexts[1]->createBuffer2(1, size_in_bytes, initBuf1); // = fc output buffer in gpu1
+  cl_fc_buf.push_back(&cl_fc_buf0);
+  cl_fc_buf.push_back(&cl_fc_buf1);
+  if (debug_log)
+  {
+    contexts[0]->printBuffer(*cl_fc_buf[0], 32);
+    contexts[1]->printBuffer(*cl_fc_buf[1], 32);
+  }
+  std::mutex global_mtx;
+  std::vector<cl_mem *> cl_sub_bufs(2, nullptr);
+  std::vector<cl_mem *> cl_sub_shared_bufs(2, nullptr);
+  std::vector<bool> sub_buf_ready_flag(w_size, false);
+  std::vector<bool> ready_free_flag(w_size, false);
+  std::vector<cl_event> copy_event(w_size, NULL);
+  std::vector<cl_event> add_event(w_size, NULL);
+  size_t sub_elemCount = elemCount / w_size;
+
+  auto task = [&](int w_rank)
+  {
+    contexts[w_rank]->createAddKernel(add_kernel_code, "add_two_buf");
+    size_t sub_size_in_bytes = size_in_bytes / w_size;
+    cl_mem cl_sub_buf = contexts[w_rank]->createBuffer2(0, sub_size_in_bytes, {});
+
+    cl_sub_bufs[w_rank] = &cl_sub_buf;
+    sub_buf_ready_flag[w_rank] = true;
+    cl_int err;
+
+    while (true)
+    {
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (sub_buf_ready_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+
+    auto dst_idx = (w_rank + 1) % w_size;
+    uint64_t handle_cl_sub_buf_dst = contexts[dst_idx]->deriveHandle(*cl_sub_bufs[dst_idx]);
+    cl_mem cl_sub_buf_dst_shared_on_rank = contexts[w_rank]->createFromHandle(handle_cl_sub_buf_dst, sub_size_in_bytes);
+    cl_sub_shared_bufs[w_rank] = &cl_sub_buf_dst_shared_on_rank;
+
+    err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], w_rank * sub_size_in_bytes, 0, sub_size_in_bytes, 0, nullptr, &copy_event[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+
+    // err = clWaitForEvents(1, &copy_event[dst_idx]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    // if (debug_log)
+    // {
+    //   std::lock_guard<std::mutex> lock(global_mtx);
+    //   std::cout << "========================" << std::endl;
+    //   std::cout << "[Step 1][Rank] " << w_rank << " sub_buf: " << std::endl;
+    //   contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
+    // }
+
+    while (true)
+    {
+      if (copy_event[dst_idx] != NULL)
+        break;
+    }
+
+    cl_kernel add_kernel = contexts[w_rank]->addKernel();
+
+    err = clSetKernelArg(add_kernel, 0, sizeof(cl_mem), cl_fc_buf[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    err = clSetKernelArg(add_kernel, 1, sizeof(cl_mem), cl_sub_bufs[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    int src1_offset = dst_idx * sub_elemCount;
+    err = clSetKernelArg(add_kernel, 2, sizeof(int), &src1_offset);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    int src2_offset = 0;
+    err = clSetKernelArg(add_kernel, 3, sizeof(int), &src2_offset);
+    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+
+    size_t global_size[] = {sub_elemCount};
+    err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 1, &copy_event[dst_idx], &add_event[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
+
+    err = clWaitForEvents(1, &add_event[w_rank]);
+    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    if (debug_log)
+    {
+      std::lock_guard<std::mutex> lock(global_mtx);
+      std::cout << "========================" << std::endl;
+      std::cout << "[Step 2][Rank] " << w_rank << " fc_buf: " << std::endl;
+      contexts[w_rank]->printBuffer(*cl_fc_buf[w_rank], 32);
+      std::cout << "[Step 1][Rank] " << w_rank << " sub_buf: " << std::endl;
+      contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
+    }
+
+    std::cout << w_rank << " --------- 1 " << std::endl;
+
+    ready_free_flag[w_rank] = true;
+    while (true)
+    {
+      std::cout << "copy_event: ";
+      quary_status(w_rank, copy_event[w_rank]);
+      std::cout << "add_event: ";
+      quary_status(w_rank, add_event[dst_idx]);
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+      size_t wait_all_ready = 0;
+      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
+      {
+        if (ready_free_flag[idx] == true)
+          wait_all_ready++;
+      }
+      if (wait_all_ready == w_size)
+      {
+        break;
+      }
+    }
+    std::cout << w_rank << " --------- 2 " << std::endl;
+    contexts[w_rank]->freeBuffer(*cl_sub_shared_bufs[w_rank]);
+    cl_sub_shared_bufs[w_rank] = nullptr;
+    contexts[w_rank]->freeBuffer(*cl_sub_bufs[w_rank]);
+    cl_sub_bufs[w_rank] = nullptr;
+    clReleaseEvent(add_event[w_rank]);
+    add_event[w_rank] = NULL;
+    clReleaseEvent(copy_event[w_rank]);
+    copy_event[w_rank] = NULL;
+  };
+  const auto start = std::chrono::high_resolution_clock::now();
+  std::thread t0(task, 0);
+  std::thread t1(task, 1);
+  t0.join();
+  t1.join();
+  for (int i = 0; i < w_size; i++)
+  {
+    contexts[i]->freeBuffer(*cl_fc_buf[i]);
+  }
+}
+
 double all_reduce_sync_with_event(int device_0, int device_1, size_t elemCount = 32)
 {
   std::vector<uint32_t> initBuf0(elemCount, 1);
@@ -110,69 +503,68 @@ double all_reduce_sync_with_event(int device_0, int device_1, size_t elemCount =
       if (copy_event[dst_idx] != NULL)
         break;
     }
+    clFinish(contexts[w_rank]->queue());
 
-    cl_kernel add_kernel = contexts[w_rank]->addKernel();
+    // cl_kernel add_kernel = contexts[w_rank]->addKernel();
 
-    err = clSetKernelArg(add_kernel, 0, sizeof(cl_mem), cl_fc_buf[w_rank]);
-    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+    // err = clSetKernelArg(add_kernel, 0, sizeof(cl_mem), cl_fc_buf[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
-    err = clSetKernelArg(add_kernel, 1, sizeof(cl_mem), cl_sub_bufs[w_rank]);
-    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+    // err = clSetKernelArg(add_kernel, 1, sizeof(cl_mem), cl_sub_bufs[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
-    int src1_offset = dst_idx * sub_elemCount;
-    err = clSetKernelArg(add_kernel, 2, sizeof(int), &src1_offset);
-    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+    // int src1_offset = dst_idx * sub_elemCount;
+    // err = clSetKernelArg(add_kernel, 2, sizeof(int), &src1_offset);
+    // CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
-    int src2_offset = 0;
-    err = clSetKernelArg(add_kernel, 3, sizeof(int), &src2_offset);
-    CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
+    // int src2_offset = 0;
+    // err = clSetKernelArg(add_kernel, 3, sizeof(int), &src2_offset);
+    // CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
-    size_t global_size[] = {sub_elemCount};
-    // std::cout << w_rank << " ---1" << std::endl;
-    err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 1, &copy_event[dst_idx], &add_event[w_rank]);
-    CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
-    // clWaitForEvents(1, &add_event[w_rank]);
-    // if (debug_log)
+    // size_t global_size[] = {sub_elemCount};
+    // // std::cout << w_rank << " ---1" << std::endl;
+    // err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 1, &copy_event[dst_idx], &add_event[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
+    // while (true)
     // {
-    //   std::lock_guard<std::mutex> lock(global_mtx);
-    //   std::cout << "========================" << std::endl;
-    //   std::cout << "[Rank] " << w_rank << " After copy sub_buf: " << std::endl;
-    //   contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
-    //   std::cout << "[Rank] " << w_rank << " After concat sub_buf: " << std::endl;
-    //   contexts[w_rank]->printBuffer(*cl_fc_buf[w_rank], 32);
+    //   if (add_event[dst_idx] != NULL)
+    //     break;
+    // }
+    // err = clWaitForEvents(1, &add_event[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+
+    // int32_t sub_part = (w_rank + 1) % w_size;
+    // int32_t rec_sub_part = (sub_part - 1) < 0 ? (w_size - 1) : (sub_part - 1) % w_size;
+    // std::vector<cl_event> dep_events = {};
+    // cl_event dep_events_tmp[2];
+    // dep_events.push_back(add_event[w_rank]);
+    // dep_events_tmp[0] = add_event[w_rank];
+    // while (true)
+    // {
+    //   if (add_event[dst_idx] != NULL)
+    //     break;
+    // }
+    // dep_events_tmp[1] = add_event[dst_idx];
+    // std::cout << w_rank << " ---2" << std::endl;
+    // dep_events.push_back(add_event[dst_idx]);
+    // err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], sub_part * sub_size_in_bytes, 0, sub_size_in_bytes, 2, dep_events_tmp, &concat_copy_event1[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    // std::cout << w_rank << " ---3" << std::endl;
+    // err = clWaitForEvents(1, &concat_copy_event1[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+
+    // while (true)
+    // {
+    //   if (concat_copy_event1[dst_idx] != NULL)
+    //     break;
     // }
 
-
-    int32_t sub_part = (w_rank + 1) % w_size;
-    int32_t rec_sub_part = (sub_part - 1) < 0 ? (w_size - 1) : (sub_part - 1) % w_size;
-    std::vector<cl_event> dep_events = {};
-    cl_event dep_events_tmp[2];
-    dep_events.push_back(add_event[w_rank]);
-    dep_events_tmp[0] = add_event[w_rank];
-    while (true)
-    {
-      if (add_event[dst_idx] != NULL)
-        break;
-    }
-    dep_events_tmp[1] = add_event[dst_idx];
-    std::cout << w_rank << " ---2" << std::endl;
-    dep_events.push_back(add_event[dst_idx]);
-    err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], sub_part * sub_size_in_bytes, 0, sub_size_in_bytes, 2, dep_events_tmp, &concat_copy_event1[w_rank]);
-    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
-    std::cout << w_rank << " ---3" << std::endl;
-
-    while (true)
-    {
-      if (concat_copy_event1[dst_idx] != NULL)
-        break;
-    }
-    std::cout << w_rank << " ---4" << std::endl;
-    err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_sub_bufs[w_rank], *cl_fc_buf[w_rank], 0, rec_sub_part * sub_size_in_bytes, sub_size_in_bytes, 1, &concat_copy_event1[dst_idx], &concat_copy_event2[w_rank]);
-    CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
-    std::cout << w_rank << " ---5" << std::endl;
-    clWaitForEvents(1, &concat_copy_event2[w_rank]);
-    std::cout << w_rank << " ---6" << std::endl;
-    // clFinish(contexts[w_rank]->queue());
+    // std::cout << w_rank << " ---4" << std::endl;
+    // err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_sub_bufs[w_rank], *cl_fc_buf[w_rank], 0, rec_sub_part * sub_size_in_bytes, sub_size_in_bytes, 1, &concat_copy_event1[dst_idx], &concat_copy_event2[w_rank]);
+    // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+    // std::cout << w_rank << " ---5" << std::endl;
+    // clWaitForEvents(1, &concat_copy_event2[w_rank]);
+    // std::cout << w_rank << " ---6" << std::endl;
     concat_copy_flag2[w_rank] = true;
 
     while (true)
@@ -228,32 +620,36 @@ int main(int argc, char **argv)
 {
   int iteration = (argc >= 2) ? atoi(argv[1]) : 1;
   debug_log = (argc == 3) ? atoi(argv[2]) : 0;
-  // size_t element_count = 2048;
-  // for (int i = 0; i < 15; i++)
-  // {
-  //   if (debug_log)
-  //     std::cout << "================================================" << std::endl;
-  //   element_count *= 2;
-  //   auto bytes = element_count * sizeof(uint32_t);
-  //   if (bytes / 1024.0 / 1024.0 / 1024.0 >= 1)
-  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 / 1024.0 << " GB: ";
-  //   else if (bytes / 1024.0 / 1024.0 >= 1)
-  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
-  //   else if (bytes / 1024.0 > 1)
-  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 << " KB: ";
-  //   // std::cout << std::endl;
-  //   double avg_val = 0.0;
-  //   for (int iter = 0; iter < iteration; iter++)
-  //   {
-  //     if (debug_log)
-  //     {
-  //       std::cout << std::endl;
-  //       std::cout << "--- " << iter << " ---" << std::endl;
-  //     }
-  //     avg_val += all_reduce_sync_with_event(0, 1, element_count);
-  //   }
-  //   std::cout << " avg time(ms): " << avg_val / iteration << std::endl;
-  // }
-  all_reduce_sync_with_event(0, 1);
+  size_t element_count = 2048;
+  for (int i = 0; i < 10; i++)
+  {
+    if (debug_log)
+      std::cout << "================================================" << std::endl;
+    element_count *= 2;
+    auto bytes = element_count * sizeof(uint32_t);
+    if (bytes / 1024.0 / 1024.0 / 1024.0 >= 1)
+      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 / 1024.0 << " GB: ";
+    else if (bytes / 1024.0 / 1024.0 >= 1)
+      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
+    else if (bytes / 1024.0 > 1)
+      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 << " KB: ";
+    // std::cout << std::endl;
+    double avg_val = 0.0;
+    for (int iter = 0; iter < iteration; iter++)
+    {
+      if (debug_log)
+      {
+        std::cout << std::endl;
+        std::cout << "--- " << iter << " ---" << std::endl;
+      }
+      test_fun0(element_count);
+      // test_fun1(element_count);
+      // test_fun2(element_count);
+      // avg_val += all_reduce_sync_with_event(0, 1, element_count);
+    }
+    std::cout << " avg time(ms): " << avg_val / iteration << std::endl;
+  }
+  // all_reduce_sync_with_event(0, 1);
+
   return 0;
 }
