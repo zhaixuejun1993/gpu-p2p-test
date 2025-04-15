@@ -15,6 +15,7 @@ add_subdirectory(ocl-copy)
 add_subdirectory(all-reduce-sync-with-host)
 add_subdirectory(all-reduce-sync-with-event)
 add_subdirectory(reproduce-event-hang)
+add_subdirectory(ocl-buffer-location-reproducer)
 
 include_directories(/usr/include/level_zero)
 link_directories(/usr/lib/x86_64-linux-gnu/)
