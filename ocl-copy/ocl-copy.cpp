@@ -2,7 +2,7 @@
 #include <CL/cl.h>
 #include <iostream>
 #include <vector>
-
+#include <chrono>
 #include "ocl_context.h"
 #include "lz_context.h"
 
@@ -22,6 +22,7 @@ kernel void write_to_remote(global int *src1, global int *src2)  \
 } \
 ";
 
+bool api_copy_enable = false;
 int ocl_p2p_sync_multi_devie_ctx_event(int device_0, int device_1, size_t elemCount)
 {
     std::vector<uint32_t> initBuf0(elemCount, 0);
@@ -40,7 +41,31 @@ int ocl_p2p_sync_multi_devie_ctx_event(int device_0, int device_1, size_t elemCo
     uint64_t handle2 = oclctx1.deriveHandle(clbuf2);
 
     cl_mem clbuf2_shared = oclctx0.createFromHandle(handle2, elemCount * sizeof(uint32_t));
-    oclctx0.runKernel1(write_kernel_code, "write_to_remote", clbuf0, clbuf2_shared, elemCount);
+    if (api_copy_enable)
+    {
+        double avg_val = 0.0;
+        for (int i = 0; i < 200; i++)
+        {
+            const auto start = std::chrono::high_resolution_clock::now();
+            cl_int err = clEnqueueCopyBuffer(oclctx0.queue(), clbuf0, clbuf2_shared, 0, 0, elemCount * sizeof(uint32_t), 0, nullptr, nullptr);
+            CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
+            clFinish(oclctx0.queue());
+            const auto end = std::chrono::high_resolution_clock::now();
+            const std::chrono::duration<double, std::milli> elapsed = end - start;
+            // std::cout << elemCount * sizeof(uint32_t) / 1024.0 / 1024.0 / 1024.0 / elapsed.count() * 1000 << std::endl;
+            if (i != 0)
+            {
+                avg_val = avg_val + elemCount * sizeof(uint32_t) / 1024.0 / 1024.0 / 1024.0 / elapsed.count() * 1000;
+            }
+        }
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << std::setw(8) << avg_val / 199.0 << std::endl;
+    }
+    else
+    {
+        oclctx0.runKernel1(write_kernel_code, "write_to_remote", clbuf0, clbuf2_shared, elemCount);
+    }
+
     // oclctx0.printBuffer(clbuf0);
     // oclctx1.printBuffer(clbuf2);
 
@@ -52,7 +77,7 @@ int ocl_p2p_sync_multi_devie_ctx_event(int device_0, int device_1, size_t elemCo
 
 int main(int argc, char **argv)
 {
-    // ocl_p2p_sync_multi_devie_ctx_event(0, 1, 4096);
+    api_copy_enable = (argc == 2) ? atoi(argv[1]) : 0;
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "====== GPU 0 -> GPU 1 ======" << std::endl;
     size_t element_count = 2048;
