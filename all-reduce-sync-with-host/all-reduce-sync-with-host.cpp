@@ -4,6 +4,8 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 #include "ocl_context.h"
 #include "lz_context.h"
@@ -37,8 +39,6 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
 {
   std::vector<uint32_t> initBuf0(elemCount, 1);
   std::vector<uint32_t> initBuf1(elemCount, 2);
-  // for (size_t i = 0; i < elemCount; i++)
-  //   initBuf[i] = (i % 1024);
 
   size_t size_in_bytes = elemCount * sizeof(uint32_t);
   // initialize two opencl contexts
@@ -69,6 +69,11 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
   std::vector<bool> sub_buf_ready_flag(w_size, false);
   std::vector<bool> add_flag(w_size, false);
   size_t sub_elemCount = elemCount / w_size;
+
+  std::atomic<int> copy_ready(0);
+  std::atomic<int> add_ready(0);
+  std::atomic<int> concat_copy_ready1(0);
+  std::atomic<int> concat_copy_ready2(0);
 
   auto task = [&](int w_rank)
   {
@@ -102,16 +107,10 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
     CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     clFinish(contexts[w_rank]->queue());
     copy_flag[w_rank] = true;
-
+    copy_ready++;
     while (true)
     {
-      size_t wait_all_ready = 0;
-      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
-      {
-        if (copy_flag[idx] == true)
-          wait_all_ready++;
-      }
-      if (wait_all_ready == w_size)
+      if (copy_ready == 2)
       {
         break;
       }
@@ -123,6 +122,8 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
       std::cout << "[Rank] " << w_rank << " After copy sub_buf: " << std::endl;
       contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
     }
+
+    // std::cout << w_rank << " --- 1" << std::endl;
 
     cl_kernel add_kernel = contexts[w_rank]->addKernel();
 
@@ -145,16 +146,12 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
     CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
     clFinish(contexts[w_rank]->queue());
     add_flag[w_rank] = true;
+    add_ready++;
+    // std::cout << w_rank << " --- 2" << std::endl;
 
     while (true)
     {
-      size_t wait_all_ready = 0;
-      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
-      {
-        if (add_flag[idx] == true)
-          wait_all_ready++;
-      }
-      if (wait_all_ready == w_size)
+      if (add_ready == 2)
       {
         break;
       }
@@ -173,16 +170,12 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
     CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     clFinish(contexts[w_rank]->queue());
     concat_copy_flag1[w_rank] = true;
+    concat_copy_ready1++;
+    // std::cout << w_rank << " --- 3" << std::endl;
 
     while (true)
     {
-      size_t wait_all_ready = 0;
-      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
-      {
-        if (concat_copy_flag1[idx] == true)
-          wait_all_ready++;
-      }
-      if (wait_all_ready == w_size)
+      if (concat_copy_ready1 == 2)
       {
         break;
       }
@@ -192,16 +185,12 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
     CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     clFinish(contexts[w_rank]->queue());
     concat_copy_flag2[w_rank] = true;
+    concat_copy_ready2++;
+    // std::cout << w_rank << " --- 4" << std::endl;
 
     while (true)
     {
-      size_t wait_all_ready = 0;
-      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
-      {
-        if (concat_copy_flag2[idx] == true)
-          wait_all_ready++;
-      }
-      if (wait_all_ready == w_size)
+      if (concat_copy_ready2 == 2)
       {
         break;
       }
@@ -213,10 +202,13 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
       std::cout << "[Rank] " << w_rank << " After concat sub_buf: " << std::endl;
       contexts[w_rank]->printBuffer(*cl_fc_buf[w_rank], 32);
     }
-    contexts[w_rank]->freeBuffer(*cl_sub_shared_bufs[w_rank]);
-    cl_sub_shared_bufs[w_rank] = nullptr;
+    // std::cout << w_rank << " --- 5" << std::endl;
+
+    contexts[dst_idx]->freeBuffer(*cl_sub_shared_bufs[dst_idx]);
+    cl_sub_shared_bufs[dst_idx] = nullptr;
     contexts[w_rank]->freeBuffer(*cl_sub_bufs[w_rank]);
     cl_sub_bufs[w_rank] = nullptr;
+    // std::cout << w_rank << " --- 6" << std::endl;
   };
   const auto start = std::chrono::high_resolution_clock::now();
   std::thread t0(task, 0);
@@ -236,7 +228,6 @@ double all_reduce_sync_with_host(int device_0, int device_1, size_t elemCount = 
 
 int main(int argc, char **argv)
 {
-  // int iteration = 30;
   int iteration = (argc >= 2) ? atoi(argv[1]) : 1;
   debug_log = (argc == 3) ? atoi(argv[2]) : 0;
   size_t element_count = 2048;
@@ -262,9 +253,10 @@ int main(int argc, char **argv)
         std::cout << "--- " << iter << " ---" << std::endl;
       }
       avg_val += all_reduce_sync_with_host(0, 1, element_count);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::cout << " avg time(ms): " << avg_val / iteration << std::endl;
   }
-  // all_reduce_sync_with_host(0, 1, 2048*2*2, 2);
+  // all_reduce_sync_with_host(0, 1, 1024*1024*256);
   return 0;
 }

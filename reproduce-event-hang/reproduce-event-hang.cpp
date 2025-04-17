@@ -4,6 +4,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 #include "ocl_context.h"
 #include "lz_context.h"
@@ -40,6 +41,7 @@ void test_fun0(size_t elemCount = 32)
   std::vector<bool> sub_buf_ready_flag(w_size, false);
   std::vector<bool> ready_free_flag(w_size, false);
   std::vector<cl_event> copy_event(w_size, NULL);
+  std::atomic<int> copy_ready(0);
 
   auto task = [&](int w_rank)
   {
@@ -85,17 +87,12 @@ void test_fun0(size_t elemCount = 32)
       std::cout << "[Step 1][Rank] " << w_rank << " sub_buf: " << std::endl;
       contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
     }
+    copy_ready++;
 
     ready_free_flag[w_rank] = true;
     while (true)
     {
-      size_t wait_all_ready = 0;
-      for (int idx = 0; idx < static_cast<int>(w_size); idx++)
-      {
-        if (ready_free_flag[idx] == true)
-          wait_all_ready++;
-      }
-      if (wait_all_ready == w_size)
+      if (copy_ready == 2)
       {
         break;
       }
@@ -123,7 +120,7 @@ int main(int argc, char **argv)
   int iteration = (argc >= 2) ? atoi(argv[1]) : 1;
   debug_log = (argc == 3) ? atoi(argv[2]) : 0;
   size_t element_count = 2048;
-  for (int i = 0; i < 10; i++)
+  for (int i = 0; i < 15; i++)
   {
     if (debug_log)
       std::cout << "================================================" << std::endl;
