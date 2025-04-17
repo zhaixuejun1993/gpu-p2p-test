@@ -14,6 +14,7 @@ oclContext::~oclContext()
     clReleaseKernel(kernel_);
     clReleaseProgram(program_);
     clReleaseKernel(add_kernel_);
+    clReleaseKernel(copy_kernel_);
     clReleaseProgram(add_program_);
     clReleaseCommandQueue(queue_);
     for (int i = 0; i < queues_.size(); i++)
@@ -359,6 +360,33 @@ void oclContext::createAddKernel(char *AddKernelCode, char *kernelName)
         exit(1);
     }
     add_kernel_ = clCreateKernel(add_program_, kernelName, &err);
+    CHECK_OCL_ERROR_EXIT(err, "clCreateKernel failed");
+}
+
+void oclContext::createCopyKernel(char *CopyKernelCode, char *kernelName)
+{
+    cl_int err;
+    cl_uint knlcount = 1;
+    const char *knlstrList[] = {CopyKernelCode};
+    size_t knlsizeList[] = {strlen(CopyKernelCode)};
+    copy_program_ = clCreateProgramWithSource(context_, knlcount, knlstrList, knlsizeList, &err);
+    CHECK_OCL_ERROR_EXIT(err, "clCreateProgramWithSource failed");
+    std::string buildopt = "-cl-std=CL2.0 -cl-intel-greater-than-4GB-buffer-required";
+    err = clBuildProgram(copy_program_, 0, NULL, buildopt.c_str(), NULL, NULL);
+    if (err < 0)
+    {
+        size_t logsize = 0;
+        err = clGetProgramBuildInfo(copy_program_, device_, CL_PROGRAM_BUILD_LOG, 0, NULL, &logsize);
+        CHECK_OCL_ERROR_EXIT(err, "clGetProgramBuildInfo failed");
+
+        std::vector<char> logbuf(logsize + 1, 0);
+        err = clGetProgramBuildInfo(copy_program_, device_, CL_PROGRAM_BUILD_LOG, logsize + 1, logbuf.data(), NULL);
+        CHECK_OCL_ERROR_EXIT(err, "clGetProgramBuildInfo failed");
+        printf("%s\n", logbuf.data());
+
+        exit(1);
+    }
+    copy_kernel_ = clCreateKernel(copy_program_, kernelName, &err);
     CHECK_OCL_ERROR_EXIT(err, "clCreateKernel failed");
 }
 
