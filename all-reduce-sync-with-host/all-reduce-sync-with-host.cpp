@@ -534,6 +534,34 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
   std::atomic<int> concat_copy_ready1(0);
   std::atomic<int> concat_copy_ready2(0);
 
+  cl_event step1_copy_event[w_size];
+  std::atomic<bool> step1_copy_event_created[w_size];
+  for (int i = 0; i < w_size; i++) {
+    step1_copy_event[i] = NULL;
+    step1_copy_event_created[i].store(false);
+  }
+
+  cl_event step2_add_event[w_size];
+  std::atomic<bool> step2_add_event_created[w_size];
+  for (int i = 0; i < w_size; i++) {
+    step2_add_event[i] = NULL;
+    step2_add_event_created[i].store(false);
+  }
+
+  cl_event step3_copy_event[w_size];
+  std::atomic<bool> step3_copy_event_created[w_size];
+  for (int i = 0; i < w_size; i++) {
+    step3_copy_event[i] = NULL;
+    step3_copy_event_created[i].store(false);
+  }
+
+  cl_event step4_copy_event[w_size];
+  std::atomic<bool> step4_copy_event_created[w_size];
+  for (int i = 0; i < w_size; i++) {
+    step4_copy_event[i] = NULL;
+    step4_copy_event_created[i].store(false);
+  }
+
   auto task = [&](int w_rank)
   {
     contexts[w_rank]->createAddKernel(add_kernel_code, "add_two_buf");
@@ -581,21 +609,28 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
       CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
       size_t global_size[] = {sub_elemCount};
-      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      // err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, &step1_copy_event[w_rank]);
       CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
-      clFinish(contexts[w_rank]->queue());
+      // clFinish(contexts[w_rank]->queue());
     }
     // err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], w_rank * sub_size_in_bytes, 0, sub_size_in_bytes, 0, nullptr, nullptr);
     // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     // clFinish(contexts[w_rank]->queue());
-    copy_flag[w_rank] = true;
-    copy_ready++;
-    while (true)
+    // copy_flag[w_rank] = true;
+    // copy_ready++;
+    // while (true)
+    // {
+    //   if (copy_ready == 2)
+    //   {
+    //     break;
+    //   }
+    // }
+    // clFinish(contexts[w_rank]->queue());
+    step1_copy_event_created[w_rank].store(true);
+    while (!step1_copy_event_created[dst_idx].load())
     {
-      if (copy_ready == 2)
-      {
-        break;
-      }
+      std::this_thread::yield();
     }
 
     if (debug_log)
@@ -605,7 +640,6 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
       contexts[w_rank]->printBuffer(*cl_sub_bufs[w_rank]);
     }
 
-    // std::cout << w_rank << " --- 1" << std::endl;
     {
       cl_kernel add_kernel = contexts[w_rank]->addKernel();
 
@@ -624,20 +658,26 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
       CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
       size_t global_size[] = {sub_elemCount};
-      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      // err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), add_kernel, 1, nullptr, global_size, nullptr, 1, &step1_copy_event[dst_idx], &step2_add_event[w_rank]);
       CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
-      clFinish(contexts[w_rank]->queue());
+      // clFinish(contexts[w_rank]->queue());
     }
-    add_flag[w_rank] = true;
-    add_ready++;
-    // std::cout << w_rank << " --- 2" << std::endl;
+    // add_flag[w_rank] = true;
+    // add_ready++;
 
-    while (true)
+    // while (true)
+    // {
+    //   if (add_ready == 2)
+    //   {
+    //     break;
+    //   }
+    // }
+    cl_event dep_events[2];
+    step2_add_event_created[w_rank].store(true);
+    while (!step2_add_event_created[dst_idx].load())
     {
-      if (add_ready == 2)
-      {
-        break;
-      }
+      std::this_thread::yield();
     }
 
     if (debug_log)
@@ -667,23 +707,28 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
       CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
       size_t global_size[] = {sub_elemCount};
-      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      // err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 2, step2_add_event, &step3_copy_event[w_rank]);
       CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
-      clFinish(contexts[w_rank]->queue());
+      // clFinish(contexts[w_rank]->queue());
     }
     // err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_fc_buf[w_rank], *cl_sub_shared_bufs[w_rank], sub_part * sub_size_in_bytes, 0, sub_size_in_bytes, 0, nullptr, nullptr);
     // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     // clFinish(contexts[w_rank]->queue());
-    concat_copy_flag1[w_rank] = true;
-    concat_copy_ready1++;
-    // std::cout << w_rank << " --- 3" << std::endl;
+    // concat_copy_flag1[w_rank] = true;
+    // concat_copy_ready1++;
 
-    while (true)
+    // while (true)
+    // {
+    //   if (concat_copy_ready1 == 2)
+    //   {
+    //     break;
+    //   }
+    // }
+    step3_copy_event_created[w_rank].store(true);
+    while (!step3_copy_event_created[dst_idx].load())
     {
-      if (concat_copy_ready1 == 2)
-      {
-        break;
-      }
+      std::this_thread::yield();
     }
 
     {
@@ -704,24 +749,26 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
       CHECK_OCL_ERROR_EXIT(err, "clSetKernelArg failed");
 
       size_t global_size[] = {sub_elemCount};
-      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      // err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 0, nullptr, nullptr);
+      err = clEnqueueNDRangeKernel(contexts[w_rank]->queue(), copy_kernel, 1, nullptr, global_size, nullptr, 1, &step3_copy_event[dst_idx], &step4_copy_event[w_rank]);
       CHECK_OCL_ERROR_EXIT(err, "clEnqueueNDRangeKernel failed");
-      clFinish(contexts[w_rank]->queue());
+      // clFinish(contexts[w_rank]->queue());
     }
     // err = clEnqueueCopyBuffer(contexts[w_rank]->queue(), *cl_sub_bufs[w_rank], *cl_fc_buf[w_rank], 0, rec_sub_part * sub_size_in_bytes, sub_size_in_bytes, 0, nullptr, nullptr);
     // CHECK_OCL_ERROR_EXIT(err, "clEnqueueCopyBuffer failed");
     // clFinish(contexts[w_rank]->queue());
-    concat_copy_flag2[w_rank] = true;
-    concat_copy_ready2++;
-    // std::cout << w_rank << " --- 4" << std::endl;
+    // concat_copy_flag2[w_rank] = true;
+    // concat_copy_ready2++;
+    // // std::cout << w_rank << " --- 4" << std::endl;
 
-    while (true)
-    {
-      if (concat_copy_ready2 == 2)
-      {
-        break;
-      }
-    }
+    // while (true)
+    // {
+    //   if (concat_copy_ready2 == 2)
+    //   {
+    //     break;
+    //   }
+    // }
+    clWaitForEvents(1, &step4_copy_event[w_rank]);
 
     if (debug_log)
     {
@@ -735,6 +782,17 @@ double all_reduce_sync_with_event_kernel(int device_0, int device_1, size_t elem
     cl_sub_shared_bufs[dst_idx] = nullptr;
     contexts[w_rank]->freeBuffer(*cl_sub_bufs[w_rank]);
     cl_sub_bufs[w_rank] = nullptr;
+    clReleaseEvent(step1_copy_event[w_rank]);
+    step1_copy_event_created[w_rank].store(false);
+
+    clReleaseEvent(step2_add_event[w_rank]);
+    step2_add_event_created[w_rank].store(false);
+
+    clReleaseEvent(step3_copy_event[w_rank]);
+    step3_copy_event_created[w_rank].store(false);
+
+    clReleaseEvent(step4_copy_event[w_rank]);
+    step4_copy_event_created[w_rank].store(false);
     // std::cout << w_rank << " --- 6" << std::endl;
   };
   const auto start = std::chrono::high_resolution_clock::now();
@@ -758,43 +816,44 @@ int main(int argc, char **argv)
   int iteration = (argc >= 2) ? atoi(argv[1]) : 1; // iteration number
   debug_log = (argc >= 3) ? atoi(argv[2]) : 0; // debug log output
   enable_kernel_copy = (argc == 4) ? atoi(argv[3]) : 0; // use kernel copy or api copy
-  if (enable_kernel_copy)
-    std::cout << "Test Kernel copy" << std::endl;
-  else
-    std::cout << "Test API copy" << std::endl;
-  size_t element_count = 2048;
-  for (int i = 0; i < 15; i++)
-  {
-    if (debug_log)
-      std::cout << "================================================" << std::endl;
-    element_count *= 2;
-    auto bytes = element_count * sizeof(uint32_t);
-    if (bytes / 1024.0 / 1024.0 / 1024.0 >= 1)
-      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 / 1024.0 << " GB: ";
-    else if (bytes / 1024.0 / 1024.0 >= 1)
-      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
-    else if (bytes / 1024.0 > 1)
-      std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 << " KB: ";
-    // std::cout << std::endl;
-    double avg_val = 0.0;
-    for (int iter = 0; iter < iteration; iter++)
-    {
-      if (debug_log)
-      {
-        std::cout << std::endl;
-        std::cout << "--- " << iter << " ---" << std::endl;
-      }
-      if (enable_kernel_copy)
-        avg_val += all_reduce_sync_with_host_kernel(0, 1, element_count);
-      else
-        avg_val += all_reduce_sync_with_host(0, 1, element_count);
+  // if (enable_kernel_copy)
+  //   std::cout << "Test Kernel copy" << std::endl;
+  // else
+  //   std::cout << "Test API copy" << std::endl;
+  // size_t element_count = 2048;
+  // for (int i = 0; i < 15; i++)
+  // {
+  //   if (debug_log)
+  //     std::cout << "================================================" << std::endl;
+  //   element_count *= 2;
+  //   auto bytes = element_count * sizeof(uint32_t);
+  //   if (bytes / 1024.0 / 1024.0 / 1024.0 >= 1)
+  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 / 1024.0 << " GB: ";
+  //   else if (bytes / 1024.0 / 1024.0 >= 1)
+  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
+  //   else if (bytes / 1024.0 > 1)
+  //     std::cout << "Buffer Size: " << std::setw(8) << bytes / 1024.0 << " KB: ";
+  //   // std::cout << std::endl;
+  //   double avg_val = 0.0;
+  //   for (int iter = 0; iter < iteration; iter++)
+  //   {
+  //     if (debug_log)
+  //     {
+  //       std::cout << std::endl;
+  //       std::cout << "--- " << iter << " ---" << std::endl;
+  //     }
+  //     if (enable_kernel_copy)
+  //       // avg_val += all_reduce_sync_with_host_kernel(0, 1, element_count);
+  //       avg_val += all_reduce_sync_with_event_kernel(0, 1, element_count);
+  //     else
+  //       avg_val += all_reduce_sync_with_host(0, 1, element_count);
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    std::cout << " avg time(ms): " << avg_val / iteration << std::endl;
-  }
+  //     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  //   }
+  //   std::cout << " avg time(ms): " << avg_val / iteration << std::endl;
+  // }
   // all_reduce_sync_with_host(0, 1, 1024*1024*256);
   // all_reduce_sync_with_host_kernel(0, 1, 32);
-  // all_reduce_sync_with_event_kernel(0, 1, 32);
+  all_reduce_sync_with_event_kernel(0, 1, 32);
   return 0;
 }
