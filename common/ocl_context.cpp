@@ -127,6 +127,7 @@ void oclContext::init(std::vector<int> device_list)
             CHECK_OCL_ERROR_EXIT(err, "clCreateContext");
 
             queue_ = clCreateCommandQueue(context_, device_, 0, &err);
+            queue_1 = clCreateCommandQueue(context_, devices[1], 0, &err);
             CHECK_OCL_ERROR_EXIT(err, "clCreateCommandQueue");
 
             char device_name[1024];
@@ -309,6 +310,31 @@ cl_mem oclContext::createBuffer2(int devIdx, size_t size, const std::vector<uint
         CHECK_OCL_ERROR_EXIT(err, "clEnqueueWriteBuffer failed");
 
         clFinish(queue_);
+    }
+
+    return clbuf;
+}
+
+cl_mem oclContext::createBuffer3(int devIdx, size_t size, const std::vector<uint32_t> &inbuf)
+{
+    cl_int err;
+
+    const cl_mem_properties_intel memProperties[] = {
+        CL_MEM_FLAGS,
+        CL_MEM_READ_WRITE | CL_MEM_ALLOW_UNRESTRICTED_SIZE_INTEL,
+        CL_MEM_DEVICE_ID_INTEL,
+        (cl_mem_properties_intel)devList_[devIdx],
+        0,
+    };
+    cl_mem clbuf = clCreateBufferWithPropertiesINTEL_(context_, memProperties, 0, size, nullptr, &err);
+    CHECK_OCL_ERROR_EXIT(err, "clCreateBufferWithPropertiesINTEL");
+
+    if (!inbuf.empty())
+    {
+        err = clEnqueueWriteBuffer(queue_1, clbuf, CL_TRUE, 0, size, inbuf.data(), 0, NULL, NULL);
+        CHECK_OCL_ERROR_EXIT(err, "clEnqueueWriteBuffer failed");
+
+        clFinish(queue_1);
     }
 
     return clbuf;

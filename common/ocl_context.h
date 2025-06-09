@@ -22,6 +22,7 @@ private:
     std::vector<cl_device_id> devList_; // multi-device context
     cl_context context_ = nullptr;
     cl_command_queue queue_ = nullptr;
+    cl_command_queue queue_1 = nullptr;
     cl_program program_ = nullptr;
     cl_kernel kernel_ = nullptr;
     pfn_clCreateBufferWithPropertiesINTEL clCreateBufferWithPropertiesINTEL_ = nullptr;
@@ -33,6 +34,7 @@ public:
     cl_device_id device() { return device_; };
     cl_context context() { return context_; };
     cl_command_queue queue() { return queue_; };
+    cl_command_queue queue1() { return queue_1; };
 
     void init(int devIdx);
     void init(std::vector<int> device_list);
@@ -44,6 +46,7 @@ public:
 
     cl_mem createBuffer(size_t size, const std::vector<uint32_t> &inbuf = std::vector<uint32_t>{});
     cl_mem createBuffer2(int devIdx, size_t size, const std::vector<uint32_t> &inbuf);
+    cl_mem createBuffer3(int devIdx, size_t size, const std::vector<uint32_t> &inbuf);
     uint64_t deriveHandle(cl_mem clbuf);
     cl_mem createFromHandle(uint64_t handle, size_t size);
     void readBuffer(cl_mem clbuf, std::vector<uint32_t> &outBuf, size_t size, size_t offset);
