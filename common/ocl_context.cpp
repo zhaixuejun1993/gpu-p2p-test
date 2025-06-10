@@ -130,10 +130,15 @@ void oclContext::init(std::vector<int> device_list)
             queue_1 = clCreateCommandQueue(context_, devices[1], 0, &err);
             CHECK_OCL_ERROR_EXIT(err, "clCreateCommandQueue");
 
-            char device_name[1024];
-            err = clGetDeviceInfo(device_, CL_DEVICE_NAME, sizeof(device_name), device_name, nullptr);
+            char device_name0[1024];
+            err = clGetDeviceInfo(devices[0], CL_DEVICE_NAME, sizeof(device_name0), device_name0, nullptr);
             CHECK_OCL_ERROR_EXIT(err, "clGetDeviceInfo");
-            printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", device_list[0], device_name, device_, context_, queue_);
+            printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", device_list[0], device_name0, devices[0], context_, queue_);
+
+            char device_name1[1024];
+            err = clGetDeviceInfo(devices[1], CL_DEVICE_NAME, sizeof(device_name1), device_name1, nullptr);
+            CHECK_OCL_ERROR_EXIT(err, "clGetDeviceInfo");
+            printf("Created device for devIdx = %d on %s, device = %p, contex = %p, queue = %p\n", device_list[1], device_name1, devices[1], context_, queue_1);
 
             return;
         }
