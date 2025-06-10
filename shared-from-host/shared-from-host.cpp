@@ -37,28 +37,33 @@ int reproducer(size_t elemCount)
     org_bufs[1] = oclctx.createBuffer3(1, byte_size, initBuf1);
     print_value("org_bufs", org_bufs[0], org_bufs[1]);
 
-    cl_mem shared_buffers[2];
-    shared_buffers[0] = clCreateBuffer(
-        oclctx.context(),
-        CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-        byte_size,
-        nullptr,
-        &ret);
-    shared_buffers[1] = clCreateBuffer(
-        oclctx.context(),
-        CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-        byte_size,
-        nullptr,
-        &ret);
-    print_value("shared_buffers", shared_buffers[0], shared_buffers[1]);
+    ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr);
 
-    cl_event copy_to_shared_event[2];
-    ret = clEnqueueCopyBuffer(oclctx.queue(), org_bufs[0], shared_buffers[0], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[0]);
-    ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[1], shared_buffers[1], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[1]);
-    // print_value("shared_buffers after copy", shared_buffers[0], shared_buffers[1]);
+    // cl_mem shared_buffers[2];
+    // shared_buffers[0] = clCreateBuffer(
+    //     oclctx.context(),
+    //     CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+    //     byte_size,
+    //     nullptr,
+    //     &ret);
+    // shared_buffers[1] = clCreateBuffer(
+    //     oclctx.context(),
+    //     CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+    //     byte_size,
+    //     nullptr,
+    //     &ret);
+    // print_value("shared_buffers", shared_buffers[0], shared_buffers[1]);
 
-    ret = clEnqueueCopyBuffer(oclctx.queue(), shared_buffers[1], org_bufs[0], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
-    ret = clEnqueueCopyBuffer(oclctx.queue1(), shared_buffers[0], org_bufs[1], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
+    // cl_event copy_to_shared_event[2];
+    // ret = clEnqueueCopyBuffer(oclctx.queue(), org_bufs[0], shared_buffers[0], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[0]);
+    // ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[1], shared_buffers[1], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[1]);
+    // // print_value("shared_buffers after copy", shared_buffers[0], shared_buffers[1]);
+
+    // ret = clEnqueueCopyBuffer(oclctx.queue(), shared_buffers[1], org_bufs[0], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
+    // ret = clEnqueueCopyBuffer(oclctx.queue1(), shared_buffers[0], org_bufs[1], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
+    
+    // ret = clEnqueueCopyBuffer(oclctx.queue(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr); // PASS
+    // ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr); // PASS
 
     clFinish(oclctx.queue());
     clFinish(oclctx.queue1());
@@ -66,17 +71,17 @@ int reproducer(size_t elemCount)
 
     clReleaseMemObject(org_bufs[0]);
     clReleaseMemObject(org_bufs[1]);
-    clReleaseMemObject(shared_buffers[0]);
-    clReleaseMemObject(shared_buffers[1]);
+    // clReleaseMemObject(shared_buffers[0]);
+    // clReleaseMemObject(shared_buffers[1]);
     return 0;
 }
 
 int main(int argc, char **argv)
 {
-    size_t element_count = 8000 * 2048;
-    reproducer(element_count);
+    // size_t element_count = 8000 * 2048;
+    // reproducer(element_count);
 
-    element_count = 2048;
+    size_t element_count = 2048;
     for (int i = 0; i < 17; i++)
     {
         element_count *= 2;
@@ -87,9 +92,9 @@ int main(int argc, char **argv)
             std::cout << "BW [GBPS]: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
         else if (bytes / 1024.0 > 1)
             std::cout << "BW [GBPS]: " << std::setw(8) << bytes / 1024.0 << " KB: ";
-        reproducer(element_count);
         std::cout << std::endl;
     }
+    reproducer(element_count);
 
     return 0;
 }
