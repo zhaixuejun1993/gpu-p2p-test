@@ -1,5 +1,5 @@
 
-#include <CL/cl.h>
+// #include <CL/cl.h>
 #include <iostream>
 #include <vector>
 #include <atomic>
@@ -7,94 +7,44 @@
 #include <string>
 #include <iomanip>
 #include "ocl_context.h"
-
-int reproducer(size_t elemCount)
-{
-    auto byte_size = elemCount * sizeof(uint32_t);
-    cl_int ret;
-    oclContext oclctx;
-    oclctx.init({0, 1});
-    auto print_value = [&](std::string name, cl_mem &buf0, cl_mem &buf1)
-    {
-        std::cout << name << ": " << std::endl;
-        std::vector<uint32_t> result0(elemCount, 2);
-        std::vector<uint32_t> result1(elemCount, 3);
-        ret = clEnqueueReadBuffer(oclctx.queue(), buf0, CL_TRUE, 0, byte_size, result0.data(), 0, NULL, NULL);
-        ret = clEnqueueReadBuffer(oclctx.queue1(), buf1, CL_TRUE, 0, byte_size, result1.data(), 0, NULL, NULL);
-        for (int i = 0; i < 32; i++)
-            std::cout << result0[i] << ", ";
-        std::cout << std::endl;
-        for (int i = 0; i < 32; i++)
-            std::cout << result1[i] << ", ";
-        std::cout << std::endl;
-    };
-
-    std::vector<uint32_t> initBuf0(elemCount, 2);
-    std::vector<uint32_t> initBuf1(elemCount, 3);
-
-    cl_mem org_bufs[2];
-    org_bufs[0] = oclctx.createBuffer2(0, byte_size, initBuf0);
-    org_bufs[1] = oclctx.createBuffer3(1, byte_size, initBuf1);
-    print_value("org_bufs", org_bufs[0], org_bufs[1]);
-
-    ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr);
-
-    // cl_mem shared_buffers[2];
-    // shared_buffers[0] = clCreateBuffer(
-    //     oclctx.context(),
-    //     CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-    //     byte_size,
-    //     nullptr,
-    //     &ret);
-    // shared_buffers[1] = clCreateBuffer(
-    //     oclctx.context(),
-    //     CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-    //     byte_size,
-    //     nullptr,
-    //     &ret);
-    // print_value("shared_buffers", shared_buffers[0], shared_buffers[1]);
-
-    // cl_event copy_to_shared_event[2];
-    // ret = clEnqueueCopyBuffer(oclctx.queue(), org_bufs[0], shared_buffers[0], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[0]);
-    // ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[1], shared_buffers[1], 0, 0, byte_size, 0, nullptr, &copy_to_shared_event[1]);
-    // // print_value("shared_buffers after copy", shared_buffers[0], shared_buffers[1]);
-
-    // ret = clEnqueueCopyBuffer(oclctx.queue(), shared_buffers[1], org_bufs[0], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
-    // ret = clEnqueueCopyBuffer(oclctx.queue1(), shared_buffers[0], org_bufs[1], 0, 0, byte_size, 2, copy_to_shared_event, nullptr);
-    
-    // ret = clEnqueueCopyBuffer(oclctx.queue(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr); // PASS
-    // ret = clEnqueueCopyBuffer(oclctx.queue1(), org_bufs[0], org_bufs[1], 0, 0, byte_size, 0, nullptr, nullptr); // PASS
-
-    clFinish(oclctx.queue());
-    clFinish(oclctx.queue1());
-    print_value("org_bufs after copy", org_bufs[0], org_bufs[1]);
-
-    clReleaseMemObject(org_bufs[0]);
-    clReleaseMemObject(org_bufs[1]);
-    // clReleaseMemObject(shared_buffers[0]);
-    // clReleaseMemObject(shared_buffers[1]);
-    return 0;
-}
+#include <CL/opencl.hpp>
 
 int main(int argc, char **argv)
 {
-    // size_t element_count = 8000 * 2048;
-    // reproducer(element_count);
+    cl_int error_code;
 
-    size_t element_count = 2048;
-    for (int i = 0; i < 17; i++)
-    {
-        element_count *= 2;
-        auto bytes = element_count * sizeof(uint32_t);
-        if (bytes / 1024.0 / 1024.0 / 1024.0 >= 1)
-            std::cout << "BW [GBPS]: " << std::setw(8) << bytes / 1024.0 / 1024.0 / 1024.0 << " GB: ";
-        else if (bytes / 1024.0 / 1024.0 >= 1)
-            std::cout << "BW [GBPS]: " << std::setw(8) << bytes / 1024.0 / 1024.0 << " MB: ";
-        else if (bytes / 1024.0 > 1)
-            std::cout << "BW [GBPS]: " << std::setw(8) << bytes / 1024.0 << " KB: ";
-        std::cout << std::endl;
-    }
-    reproducer(element_count);
+    cl_uint num_platforms = 0;
+    error_code = clGetPlatformIDs(0, NULL, &num_platforms);
+    if (num_platforms != 1)
+        std::cout << "multi platform!" << std::endl;
+
+    std::vector<cl_platform_id> platform_ids(num_platforms);
+    error_code = clGetPlatformIDs(num_platforms, platform_ids.data(), NULL);
+
+    cl::Context ctx;
+    cl::Platform platform = cl::Platform(platform_ids[0]);
+    std::vector<cl::Device> devices;
+    platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
+    ctx = cl::Context(devices);
+
+    std::string kernel_code = "__kernel void test() {}";
+    cl::Program::Sources sources;
+    sources.push_back({kernel_code.c_str(), kernel_code.length()});
+
+    if (devices.size() != 2)
+        std::cout << "Can not find 2 gpu device!" << std::endl;
+
+    cl::Program program1(ctx, sources);
+    program1.build({devices[1]});
+    cl::vector<cl::Kernel> kernels;
+    program1.createKernels(&kernels);
+    std::cout << "create kernel1 size: " << kernels.size() << std::endl;
+
+    // cl::Program program2(ctx, sources);
+    // program2.build({devices[1]});
+    // cl::vector<cl::Kernel> kernels2;
+    // program2.createKernels(&kernels2);
+    // std::cout << "create kernel2 size: " << kernels2.size() << std::endl;
 
     return 0;
 }
